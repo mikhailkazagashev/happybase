@@ -5,11 +5,13 @@ HappyBase connection module.
 """
 
 import logging
+import sasl
 
 import six
 from thriftpy.thrift import TClient
 from thriftpy.transport import TBufferedTransport, TFramedTransport, TSocket
 from thriftpy.protocol import TBinaryProtocol, TCompactProtocol
+from thrift_sasl import TSaslClientTransport
 
 from Hbase_thrift import Hbase, ColumnDescriptor
 
@@ -108,7 +110,8 @@ class Connection(object):
     def __init__(self, host=DEFAULT_HOST, port=DEFAULT_PORT, timeout=None,
                  autoconnect=True, table_prefix=None,
                  table_prefix_separator=b'_', compat=DEFAULT_COMPAT,
-                 transport=DEFAULT_TRANSPORT, protocol=DEFAULT_PROTOCOL):
+                 transport=DEFAULT_TRANSPORT, protocol=DEFAULT_PROTOCOL,
+                 use_kerberos=False, sasl_service_name='hbase'):
 
         if transport not in THRIFT_TRANSPORTS:
             raise ValueError("'transport' must be one of %s"
@@ -139,6 +142,8 @@ class Connection(object):
         self.table_prefix = table_prefix
         self.table_prefix_separator = table_prefix_separator
         self.compat = compat
+        self.use_kerberos = use_kerberos
+        self.sasl_service_name = sasl_service_name
 
         self._transport_class = THRIFT_TRANSPORTS[transport]
         self._protocol_class = THRIFT_PROTOCOLS[protocol]
@@ -154,6 +159,18 @@ class Connection(object):
         socket = TSocket(host=self.host, port=self.port, socket_timeout=self.timeout)
 
         self.transport = self._transport_class(socket)
+        if self.use_kerberos:
+            self.transport = TSaslClientTransport(self.transport, self.host, self.sasl_service_name)
+            sasl_auth = 'GSSAPI'
+            
+            def sasl_factory():
+                    sasl_client = sasl.Client()
+                    sasl_client.setAttr('host', self.host)
+                    sasl_client.setAttr('service', self.sasl_service_name)
+                    sasl_client.init()
+                    return sasl_client
+            
+            self.transport = TSaslClientTransport(sasl_factory, sasl_auth, socket)
         protocol = self._protocol_class(self.transport, decode_response=False)
         self.client = TClient(Hbase, protocol)
 
